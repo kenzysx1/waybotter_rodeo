@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "manifest_version": 1,
   "description": "Rolador de dados com Dado Selvagem, Sucessos, Complicações e Pagar o Preço para Owlbear Rodeo.",
-  "icon": "icon.svg",
+  "icon": "https://kenzysx1.github.io/waybotter_rodeo/icon.svg",
   "action": {
     "title": "Dado Selvagem",
-    "icon": "icon.svg",
-    "popover": "index.html",
+    "icon": "https://kenzysx1.github.io/waybotter_rodeo/icon.svg",
+    "popover": "https://kenzysx1.github.io/waybotter_rodeo/index.html",
     "width": 430,
     "height": 660
   }
