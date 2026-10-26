@@ -535,7 +535,10 @@
     import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3/+esm";
     window.OBR = OBR;
 
-    const ROOM_METADATA_KEY = "br.rpg.dado-selvagem.v1";
+    // Dois canais: broadcast para eventos ao vivo, metadata para histórico persistente
+    const BROADCAST_ROLL    = "br.rpg.dado-selvagem.roll.v2";
+    const BROADCAST_PAGAR   = "br.rpg.dado-selvagem.pagar.v2";
+    const ROOM_METADATA_KEY = "br.rpg.dado-selvagem.v2";
 
     let qtdDados = 3;
     let dc = 1;
@@ -571,26 +574,39 @@
             console.error("Erro ao obter dados do jogador OBR:", e);
           }
 
-          // Load shared room history
+          // Carregar histórico persistente da sala
           try {
             const metadata = await OBR.room.getMetadata();
             if (metadata && metadata[ROOM_METADATA_KEY]) {
               rollHistory = metadata[ROOM_METADATA_KEY].history || [];
-              if (rollHistory.length > 0) {
-                renderCurrentResult(rollHistory[0]);
-              }
+              if (rollHistory.length > 0) renderCurrentResult(rollHistory[0]);
               renderFeed();
             }
           } catch(e) {}
 
-          // Listen for room updates from other players in real-time!
-          OBR.room.onMetadataChange((meta) => {
-            if (meta && meta[ROOM_METADATA_KEY]) {
-              rollHistory = meta[ROOM_METADATA_KEY].history || [];
-              if (rollHistory.length > 0) {
-                renderCurrentResult(rollHistory[0]);
-              }
+          // Escutar rolagens ao vivo de TODOS os jogadores (broadcast)
+          OBR.broadcast.onMessage(BROADCAST_ROLL, (event) => {
+            const roll = event.data;
+            if (!roll || rollHistory.some(r => r.id === roll.id)) return;
+            rollHistory.unshift(roll);
+            renderCurrentResult(roll);
+            renderFeed();
+            // Persistir no histórico da sala
+            persistHistory();
+          });
+
+          // Escutar "Pagar o Preço" de outros jogadores
+          OBR.broadcast.onMessage(BROADCAST_PAGAR, (event) => {
+            const data = event.data;
+            if (!data) return;
+            const roll = rollHistory.find(r => r.id === data.rollId);
+            if (roll) {
+              Object.assign(roll, data.updates);
               renderFeed();
+              const currContainer = document.getElementById('current-result');
+              if (currContainer && currContainer.getAttribute('data-roll-id') === roll.id) {
+                renderCurrentResult(roll);
+              }
             }
           });
         });
@@ -608,20 +624,31 @@
       }
     }
 
-    async function syncRolls() {
+    // Persistência do histórico na sala (para quem entrar depois)
+    async function persistHistory() {
       if (isConnectedToOBR) {
         try {
           await OBR.room.setMetadata({
-            [ROOM_METADATA_KEY]: {
-              history: rollHistory.slice(0, 30) // keep last 30 rolls
-            }
+            [ROOM_METADATA_KEY]: { history: rollHistory.slice(0, 30) }
           });
-        } catch(e) {
-          console.error("Erro ao sincronizar rolagens:", e);
-        }
+        } catch(e) {}
       } else {
         localStorage.setItem(ROOM_METADATA_KEY, JSON.stringify(rollHistory.slice(0, 30)));
       }
+    }
+
+    // Envia e aplica uma rolagem localmente + broadcast para os outros
+    async function publicarRolagem(rollObj) {
+      rollHistory.unshift(rollObj);
+      renderCurrentResult(rollObj);
+      renderFeed();
+
+      if (isConnectedToOBR) {
+        // Broadcast para todos os outros jogadores
+        await OBR.broadcast.sendMessage(BROADCAST_ROLL, rollObj, { destination: "REMOTE" });
+        OBR.notification.show(`🎲 ${currentPlayer.name}: ${rollObj.titulo}`);
+      }
+      await persistHistory();
     }
 
     window.switchTab = function(tab) {
@@ -768,16 +795,7 @@
         precoPago: false
       };
 
-      rollHistory.unshift(rollObj);
-      renderCurrentResult(rollObj);
-      renderFeed();
-      await syncRolls();
-
-      if (isConnectedToOBR) {
-        try {
-          OBR.notification.show(`🎲 ${currentPlayer.name}: ${rollObj.titulo}`);
-        } catch(e) {}
-      }
+      await publicarRolagem(rollObj);
     };
 
     window.pagarPreco = async function(rollId) {
@@ -807,10 +825,23 @@
 
       renderCurrentResult(roll);
       renderFeed();
-      await syncRolls();
+      await persistHistory();
 
       if (isConnectedToOBR) {
         try {
+          // Notificar outros jogadores sobre o "Pagar o Preço"
+          await OBR.broadcast.sendMessage(BROADCAST_PAGAR, {
+            rollId: roll.id,
+            updates: {
+              sucessos: roll.sucessos,
+              ampliacoes: roll.ampliacoes,
+              complicacoes: roll.complicacoes,
+              titulo: roll.titulo,
+              cor: roll.cor,
+              desc: roll.desc,
+              precoPago: true
+            }
+          }, { destination: "REMOTE" });
           OBR.notification.show(`⚖️ ${currentPlayer.name} pagou o preço: ${roll.titulo}`);
         } catch(e) {}
       }
