@@ -589,9 +589,19 @@
             const roll = event.data;
             if (!roll || rollHistory.some(r => r.id === roll.id)) return;
             rollHistory.unshift(roll);
-            renderCurrentResult(roll);
+            // Apenas atualiza o feed de histórico, sem sobrescrever o painel principal
             renderFeed();
-            // Persistir no histórico da sala
+            // Piscar a aba de histórico para sinalizar nova rolagem
+            const feedBtn = document.getElementById('tab-feed-btn');
+            if (feedBtn && !feedBtn.classList.contains('active')) {
+              feedBtn.style.background = '#2ecc71';
+              feedBtn.style.color = '#fff';
+              setTimeout(() => {
+                feedBtn.style.background = '';
+                feedBtn.style.color = '';
+              }, 2500);
+            }
+            // Persistir no histórico da sala para quem entrar depois
             persistHistory();
           });
 
@@ -624,16 +634,41 @@
       }
     }
 
-    // Persistência do histórico na sala (para quem entrar depois)
+    // Persistência do histórico na sala com merge (evita sobrescrever rolls simultâneos)
     async function persistHistory() {
       if (isConnectedToOBR) {
         try {
-          await OBR.room.setMetadata({
-            [ROOM_METADATA_KEY]: { history: rollHistory.slice(0, 30) }
+          // Ler o histórico atual da sala antes de salvar para fazer merge
+          const currentMeta = await OBR.room.getMetadata();
+          const remoteHistory = (currentMeta && currentMeta[ROOM_METADATA_KEY])
+            ? currentMeta[ROOM_METADATA_KEY].history || []
+            : [];
+
+          // Mesclar: pegar todos os rolls únicos (locais + remotos), ordenados por ID/tempo
+          const existingIds = new Set(rollHistory.map(r => r.id));
+          for (const r of remoteHistory) {
+            if (!existingIds.has(r.id)) {
+              rollHistory.push(r);
+              existingIds.add(r.id);
+            }
+          }
+
+          // Ordenar do mais recente para o mais antigo pelo timestamp embutido no ID
+          rollHistory.sort((a, b) => {
+            const tA = parseInt(a.id.split('-')[1]) || 0;
+            const tB = parseInt(b.id.split('-')[1]) || 0;
+            return tB - tA;
           });
-        } catch(e) {}
+
+          await OBR.room.setMetadata({
+            [ROOM_METADATA_KEY]: { history: rollHistory.slice(0, 40) }
+          });
+          renderFeed();
+        } catch(e) {
+          console.error("Erro ao persistir histórico:", e);
+        }
       } else {
-        localStorage.setItem(ROOM_METADATA_KEY, JSON.stringify(rollHistory.slice(0, 30)));
+        localStorage.setItem(ROOM_METADATA_KEY, JSON.stringify(rollHistory.slice(0, 40)));
       }
     }
 
