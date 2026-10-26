@@ -417,7 +417,44 @@
       cursor: not-allowed;
     }
 
-    /* Feed List */
+    /* Feed List & Header Actions */
+    .feed-header-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .feed-count-badge {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .btn-clear-feed {
+      background: rgba(231, 76, 60, 0.15);
+      border: 1px solid var(--red-fail);
+      color: #ff6b6b;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.2s;
+    }
+
+    .btn-clear-feed:hover {
+      background: var(--red-fail);
+      color: #fff;
+    }
+
     .feed-container {
       display: flex;
       flex-direction: column;
@@ -459,7 +496,7 @@
     </div>
   </div>
 
-  <!-- Tabs Navigation -->
+  <!-- Tabs Navigation (Janela nativa implementada) -->
   <div class="tabs">
     <button class="tab-btn active" id="tab-roll-btn" onclick="window.switchTab('roll')">Rolador</button>
     <button class="tab-btn" id="tab-feed-btn" onclick="window.switchTab('feed')">Histórico da Mesa</button>
@@ -523,8 +560,15 @@
     <div id="current-result" style="margin-top: 14px;"></div>
   </div>
 
-  <!-- Tab 2: Table History / Feed -->
+  <!-- Tab 2: Table History / Feed (Janela já implementada) -->
   <div id="tab-feed" style="display: none;">
+    <div class="feed-header-actions">
+      <span class="feed-count-badge" id="feed-count">0 rolagens</span>
+      <button class="btn-clear-feed" id="btn-clear-feed" onclick="window.limparHistorico()">
+        <span>🗑️</span>
+        <span>Limpar Histórico</span>
+      </button>
+    </div>
     <div class="feed-container" id="feed-list">
       <div class="empty-state">Nenhuma rolagem feita ainda na mesa.</div>
     </div>
@@ -537,6 +581,7 @@
 
     const BROADCAST_ROLL    = "br.rpg.dado-selvagem.roll.v2";
     const BROADCAST_PAGAR   = "br.rpg.dado-selvagem.pagar.v2";
+    const BROADCAST_CLEAR   = "br.rpg.dado-selvagem.clear.v2";
     const ROOM_METADATA_KEY = "br.rpg.dado-selvagem.v2";
 
     let qtdDados = 3;
@@ -588,10 +633,23 @@
             console.error("Erro ao carregar histórico da sala:", e);
           }
 
-          // Observar atualizações de metadata da sala (mantém sincronizado mesmo para quem perdeu broadcast)
+          // Observar atualizações de metadata da sala
           OBR.room.onMetadataChange((metadata) => {
             if (metadata && metadata[ROOM_METADATA_KEY]) {
               const remoteHistory = metadata[ROOM_METADATA_KEY].history || [];
+
+              // Se a sala estiver com histórico vazio (foi limpo), reflete localmente
+              if (remoteHistory.length === 0) {
+                rollHistory = [];
+                renderFeed();
+                const currContainer = document.getElementById('current-result');
+                if (currContainer) {
+                  currContainer.removeAttribute('data-roll-id');
+                  currContainer.innerHTML = '';
+                }
+                return;
+              }
+
               let updated = false;
               for (const r of remoteHistory) {
                 if (!rollHistory.some(existing => existing.id === r.id)) {
@@ -617,11 +675,9 @@
 
             rollHistory.unshift(roll);
 
-            // Atualiza tanto o resultado mais recente quanto o histórico
             renderCurrentResult(roll);
             renderFeed();
 
-            // Alerta visual no botão de histórico se o usuário estiver na aba de rolagem
             const feedBtn = document.getElementById('tab-feed-btn');
             if (feedBtn && !feedBtn.classList.contains('active')) {
               feedBtn.style.background = '#2ecc71';
@@ -632,7 +688,6 @@
               }, 2500);
             }
 
-            // Apenas o GM persiste a alteração no Room Metadata
             if (currentPlayer.role === "GM") {
               persistHistory();
             }
@@ -655,6 +710,28 @@
               persistHistory();
             }
           });
+
+          // Escutar solicitação de limpeza de histórico vinda de outro jogador
+          OBR.broadcast.onMessage(BROADCAST_CLEAR, async (event) => {
+            rollHistory = [];
+            localStorage.removeItem(ROOM_METADATA_KEY);
+            renderFeed();
+            const currContainer = document.getElementById('current-result');
+            if (currContainer) {
+              currContainer.removeAttribute('data-roll-id');
+              currContainer.innerHTML = '';
+            }
+            const author = event.data?.authorName || "Um jogador";
+            OBR.notification.show(`🗑️ ${author} apagou o histórico de rolagens.`);
+
+            if (currentPlayer.role === "GM") {
+              try {
+                await OBR.room.setMetadata({
+                  [ROOM_METADATA_KEY]: { history: [] }
+                });
+              } catch(e) {}
+            }
+          });
         });
       } else {
         document.getElementById('player-name').innerText = "Modo Local";
@@ -670,10 +747,9 @@
       }
     }
 
-    // Persistência do histórico na sala (apenas GM pode chamar OBR.room.setMetadata)
     async function persistHistory() {
       if (isConnectedToOBR) {
-        if (currentPlayer.role !== "GM") return; // Jogadores comuns não têm permissão para gravar na sala
+        if (currentPlayer.role !== "GM") return;
 
         try {
           const currentMeta = await OBR.room.getMetadata();
@@ -713,7 +789,6 @@
 
       if (isConnectedToOBR) {
         try {
-          // Destino "REMOTE" enviado como string no 3º parâmetro do SDK
           await OBR.broadcast.sendMessage(BROADCAST_ROLL, rollObj, "REMOTE");
           OBR.notification.show(`🎲 ${currentPlayer.name}: ${rollObj.titulo}`);
         } catch(e) {
@@ -724,6 +799,7 @@
       await persistHistory();
     }
 
+    // Alternância limpa de abas usando a janela existente (impede qualquer sobreposição)
     window.switchTab = function(tab) {
       const rollTab = document.getElementById('tab-roll');
       const feedTab = document.getElementById('tab-feed');
@@ -731,8 +807,8 @@
       const btnFeed = document.getElementById('tab-feed-btn');
 
       if (tab === 'roll') {
-        rollTab.style.display = 'block';
         feedTab.style.display = 'none';
+        rollTab.style.display = 'block';
         btnRoll.classList.add('active');
         btnFeed.classList.remove('active');
       } else {
@@ -741,6 +817,46 @@
         btnRoll.classList.remove('active');
         btnFeed.classList.add('active');
         renderFeed();
+      }
+    };
+
+    // Função para apagar o histórico de rolagens
+    window.limparHistorico = async function() {
+      if (rollHistory.length === 0) return;
+
+      const confirmar = confirm("Tem certeza que deseja apagar todo o histórico de rolagens da mesa?");
+      if (!confirmar) return;
+
+      rollHistory = [];
+      localStorage.removeItem(ROOM_METADATA_KEY);
+
+      renderFeed();
+
+      const currContainer = document.getElementById('current-result');
+      if (currContainer) {
+        currContainer.removeAttribute('data-roll-id');
+        currContainer.innerHTML = '';
+      }
+
+      if (isConnectedToOBR) {
+        try {
+          await OBR.broadcast.sendMessage(BROADCAST_CLEAR, {
+            authorName: currentPlayer.name
+          }, "REMOTE");
+          OBR.notification.show(`🗑️ ${currentPlayer.name} limpou o histórico.`);
+        } catch(e) {
+          console.error("Erro ao transmitir limpeza de histórico:", e);
+        }
+
+        if (currentPlayer.role === "GM") {
+          try {
+            await OBR.room.setMetadata({
+              [ROOM_METADATA_KEY]: { history: [] }
+            });
+          } catch(e) {
+            console.error("Erro ao resetar histórico no room metadata:", e);
+          }
+        }
       }
     };
 
@@ -1036,6 +1152,19 @@
 
     function renderFeed() {
       const feed = document.getElementById('feed-list');
+      const countEl = document.getElementById('feed-count');
+      const btnClear = document.getElementById('btn-clear-feed');
+
+      if (countEl) {
+        countEl.innerText = `${rollHistory.length} ${rollHistory.length === 1 ? 'rolagem' : 'rolagens'}`;
+      }
+
+      if (btnClear) {
+        btnClear.disabled = rollHistory.length === 0;
+        btnClear.style.opacity = rollHistory.length === 0 ? "0.4" : "1";
+        btnClear.style.cursor = rollHistory.length === 0 ? "not-allowed" : "pointer";
+      }
+
       if (!feed) return;
       if (rollHistory.length === 0) {
         feed.innerHTML = '<div class="empty-state">Nenhuma rolagem feita ainda na mesa.</div>';
