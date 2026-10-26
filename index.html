@@ -535,7 +535,6 @@
     import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3/+esm";
     window.OBR = OBR;
 
-    // Dois canais: broadcast para eventos ao vivo, metadata para histórico persistente
     const BROADCAST_ROLL    = "br.rpg.dado-selvagem.roll.v2";
     const BROADCAST_PAGAR   = "br.rpg.dado-selvagem.pagar.v2";
     const ROOM_METADATA_KEY = "br.rpg.dado-selvagem.v2";
@@ -545,7 +544,8 @@
     let modo = 'normal';
     let currentPlayer = {
       id: "local-user-" + Math.random().toString(36).substr(2, 5),
-      name: "Jogador"
+      name: "Jogador",
+      role: "PLAYER"
     };
     let rollHistory = [];
     let isConnectedToOBR = false;
@@ -567,14 +567,16 @@
           try {
             const name = await OBR.player.getName();
             const id = await OBR.player.getId();
+            const role = await OBR.player.getRole();
             currentPlayer.name = name || "Jogador";
             currentPlayer.id = id || currentPlayer.id;
+            currentPlayer.role = role || "PLAYER";
             document.getElementById('player-name').innerText = currentPlayer.name;
           } catch (e) {
             console.error("Erro ao obter dados do jogador OBR:", e);
           }
 
-          // Carregar histórico persistente da sala
+          // Carregar histórico persistente inicial da sala
           try {
             const metadata = await OBR.room.getMetadata();
             if (metadata && metadata[ROOM_METADATA_KEY]) {
@@ -582,16 +584,44 @@
               if (rollHistory.length > 0) renderCurrentResult(rollHistory[0]);
               renderFeed();
             }
-          } catch(e) {}
+          } catch(e) {
+            console.error("Erro ao carregar histórico da sala:", e);
+          }
 
-          // Escutar rolagens ao vivo de TODOS os jogadores (broadcast)
+          // Observar atualizações de metadata da sala (mantém sincronizado mesmo para quem perdeu broadcast)
+          OBR.room.onMetadataChange((metadata) => {
+            if (metadata && metadata[ROOM_METADATA_KEY]) {
+              const remoteHistory = metadata[ROOM_METADATA_KEY].history || [];
+              let updated = false;
+              for (const r of remoteHistory) {
+                if (!rollHistory.some(existing => existing.id === r.id)) {
+                  rollHistory.push(r);
+                  updated = true;
+                }
+              }
+              if (updated) {
+                rollHistory.sort((a, b) => {
+                  const tA = parseInt(a.id.split('-')[1]) || 0;
+                  const tB = parseInt(b.id.split('-')[1]) || 0;
+                  return tB - tA;
+                });
+                renderFeed();
+              }
+            }
+          });
+
+          // Escutar rolagens ao vivo de TODOS os jogadores via broadcast
           OBR.broadcast.onMessage(BROADCAST_ROLL, (event) => {
             const roll = event.data;
             if (!roll || rollHistory.some(r => r.id === roll.id)) return;
+
             rollHistory.unshift(roll);
-            // Apenas atualiza o feed de histórico, sem sobrescrever o painel principal
+
+            // Atualiza tanto o resultado mais recente quanto o histórico
+            renderCurrentResult(roll);
             renderFeed();
-            // Piscar a aba de histórico para sinalizar nova rolagem
+
+            // Alerta visual no botão de histórico se o usuário estiver na aba de rolagem
             const feedBtn = document.getElementById('tab-feed-btn');
             if (feedBtn && !feedBtn.classList.contains('active')) {
               feedBtn.style.background = '#2ecc71';
@@ -601,8 +631,11 @@
                 feedBtn.style.color = '';
               }, 2500);
             }
-            // Persistir no histórico da sala para quem entrar depois
-            persistHistory();
+
+            // Apenas o GM persiste a alteração no Room Metadata
+            if (currentPlayer.role === "GM") {
+              persistHistory();
+            }
           });
 
           // Escutar "Pagar o Preço" de outros jogadores
@@ -617,6 +650,9 @@
               if (currContainer && currContainer.getAttribute('data-roll-id') === roll.id) {
                 renderCurrentResult(roll);
               }
+            }
+            if (currentPlayer.role === "GM") {
+              persistHistory();
             }
           });
         });
@@ -634,17 +670,17 @@
       }
     }
 
-    // Persistência do histórico na sala com merge (evita sobrescrever rolls simultâneos)
+    // Persistência do histórico na sala (apenas GM pode chamar OBR.room.setMetadata)
     async function persistHistory() {
       if (isConnectedToOBR) {
+        if (currentPlayer.role !== "GM") return; // Jogadores comuns não têm permissão para gravar na sala
+
         try {
-          // Ler o histórico atual da sala antes de salvar para fazer merge
           const currentMeta = await OBR.room.getMetadata();
           const remoteHistory = (currentMeta && currentMeta[ROOM_METADATA_KEY])
             ? currentMeta[ROOM_METADATA_KEY].history || []
             : [];
 
-          // Mesclar: pegar todos os rolls únicos (locais + remotos), ordenados por ID/tempo
           const existingIds = new Set(rollHistory.map(r => r.id));
           for (const r of remoteHistory) {
             if (!existingIds.has(r.id)) {
@@ -653,7 +689,6 @@
             }
           }
 
-          // Ordenar do mais recente para o mais antigo pelo timestamp embutido no ID
           rollHistory.sort((a, b) => {
             const tA = parseInt(a.id.split('-')[1]) || 0;
             const tB = parseInt(b.id.split('-')[1]) || 0;
@@ -663,26 +698,29 @@
           await OBR.room.setMetadata({
             [ROOM_METADATA_KEY]: { history: rollHistory.slice(0, 40) }
           });
-          renderFeed();
         } catch(e) {
-          console.error("Erro ao persistir histórico:", e);
+          console.error("Erro ao persistir histórico na sala:", e);
         }
       } else {
         localStorage.setItem(ROOM_METADATA_KEY, JSON.stringify(rollHistory.slice(0, 40)));
       }
     }
 
-    // Envia e aplica uma rolagem localmente + broadcast para os outros
     async function publicarRolagem(rollObj) {
       rollHistory.unshift(rollObj);
       renderCurrentResult(rollObj);
       renderFeed();
 
       if (isConnectedToOBR) {
-        // Broadcast para todos os outros jogadores
-        await OBR.broadcast.sendMessage(BROADCAST_ROLL, rollObj, { destination: "REMOTE" });
-        OBR.notification.show(`🎲 ${currentPlayer.name}: ${rollObj.titulo}`);
+        try {
+          // Destino "REMOTE" enviado como string no 3º parâmetro do SDK
+          await OBR.broadcast.sendMessage(BROADCAST_ROLL, rollObj, "REMOTE");
+          OBR.notification.show(`🎲 ${currentPlayer.name}: ${rollObj.titulo}`);
+        } catch(e) {
+          console.error("Erro ao enviar broadcast:", e);
+        }
       }
+
       await persistHistory();
     }
 
@@ -860,11 +898,9 @@
 
       renderCurrentResult(roll);
       renderFeed();
-      await persistHistory();
 
       if (isConnectedToOBR) {
         try {
-          // Notificar outros jogadores sobre o "Pagar o Preço"
           await OBR.broadcast.sendMessage(BROADCAST_PAGAR, {
             rollId: roll.id,
             updates: {
@@ -876,10 +912,14 @@
               desc: roll.desc,
               precoPago: true
             }
-          }, { destination: "REMOTE" });
+          }, "REMOTE");
           OBR.notification.show(`⚖️ ${currentPlayer.name} pagou o preço: ${roll.titulo}`);
-        } catch(e) {}
+        } catch(e) {
+          console.error("Erro ao enviar broadcast de preço pago:", e);
+        }
       }
+
+      await persistHistory();
     };
 
     function buildDieHtml(val, isSpecial, modo) {
