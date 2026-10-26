@@ -1,0 +1,14 @@
+{
+  "name": "Dado Selvagem",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "description": "Rolador de dados com Dado Selvagem, Sucessos, Complicações e Pagar o Preço para Owlbear Rodeo.",
+  "icon": "icon.svg",
+  "action": {
+    "title": "Dado Selvagem",
+    "icon": "icon.svg",
+    "popover": "index.html",
+    "width": 430,
+    "height": 660
+  }
+}

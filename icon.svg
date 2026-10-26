@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#805ad5" />
+      <stop offset="100%" stop-color="#553c9a" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="2" dy="4" stdDeviation="3" flood-opacity="0.4" />
+    </filter>
+  </defs>
+  <!-- Die Base -->
+  <rect x="15" y="15" width="70" height="70" rx="16" fill="url(#purpleGrad)" stroke="#b794f4" stroke-width="4" filter="url(#shadow)" />
+  <!-- Pips for 6 (wild die style) -->
+  <circle cx="34" cy="32" r="5.5" fill="#ffffff" />
+  <circle cx="66" cy="32" r="5.5" fill="#ffffff" />
+  <circle cx="34" cy="50" r="5.5" fill="#ffffff" />
+  <circle cx="66" cy="50" r="5.5" fill="#ffffff" />
+  <circle cx="34" cy="68" r="5.5" fill="#ffffff" />
+  <circle cx="66" cy="68" r="5.5" fill="#ffffff" />
+</svg>
